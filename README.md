@@ -43,13 +43,13 @@ normal connection dialog. Never commit `.env`; it is ignored by git.
 
 ## Brokers
 
-| Broker | Status | Credentials |
-| --- | --- | --- |
-| Ostad Demo | Ready | Any login/password |
-| MetaApi | Adapter available | API key + account ID |
-| OANDA | Adapter available | API key + account ID |
-| Alpaca | Adapter available | API key + API secret |
-| Binance | Adapter available | API key + API secret |
+| Broker     | Status            | Credentials          |
+| ---------- | ----------------- | -------------------- |
+| Ostad Demo | Ready             | Any login/password   |
+| MetaApi    | Adapter available | API key + account ID |
+| OANDA      | Adapter available | API key + account ID |
+| Alpaca     | Adapter available | API key + API secret |
+| Binance    | Adapter available | API key + API secret |
 
 See [docs/brokers.md](docs/brokers.md) for details. MT4 servers can only be
 connected via MetaApi.
