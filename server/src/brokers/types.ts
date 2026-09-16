@@ -39,6 +39,17 @@ export interface Position {
   swap: number;
   commission: number;
 }
+export interface ClosedPosition {
+  id: string;
+  symbol: string;
+  side: Side;
+  volume: number;
+  openPrice: number;
+  closePrice: number;
+  openTime: number;
+  closeTime: number;
+  profit: number;
+}
 export interface Order {
   id: string;
   symbol: string;
@@ -78,6 +89,7 @@ export interface BrokerAdapter {
   account(): Promise<AccountInfo>;
   positions(): Promise<Position[]>;
   orders(): Promise<Order[]>;
+  history(): Promise<ClosedPosition[]>;
   placeOrder(req: OrderRequest): Promise<Position | Order>;
   closePosition(id: string, volume?: number): Promise<void>;
   modifyPosition(id: string, sl?: number, tp?: number): Promise<void>;

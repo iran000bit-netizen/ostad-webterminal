@@ -3,6 +3,7 @@ import type {
   BrokerAdapter,
   BrokerCredentials,
   Candle,
+  ClosedPosition,
   Order,
   OrderRequest,
   Position,
@@ -68,6 +69,7 @@ export class DemoBroker implements BrokerAdapter {
   private readonly quoteMap = new Map<string, Quote>();
   private readonly positionsMap = new Map<string, Position>();
   private readonly ordersMap = new Map<string, Order>();
+  private readonly historyList: ClosedPosition[] = [];
   private readonly listeners = new Set<(q: Quote) => void>();
   private balance = 10_000;
 
@@ -192,8 +194,18 @@ export class DemoBroker implements BrokerAdapter {
     return [...this.ordersMap.values()];
   }
 
+  async history() {
+    return [...this.historyList];
+  }
+
   async placeOrder(request: OrderRequest) {
-    if (request.volume <= 0) throw new Error('Volume must be positive');
+    if (
+      typeof request.volume !== 'number' ||
+      !Number.isFinite(request.volume) ||
+      request.volume <= 0
+    ) {
+      throw new Error('Volume must be positive');
+    }
     if (request.type !== 'market') {
       if (!request.price) throw new Error('Pending order price is required');
       const pending: Order = {
@@ -217,7 +229,26 @@ export class DemoBroker implements BrokerAdapter {
     const position = this.positionsMap.get(positionId);
     if (!position) throw new Error('Position not found');
     const closedVolume = Math.min(volume ?? position.volume, position.volume);
-    this.balance += position.profit * (closedVolume / position.volume);
+    const fraction = closedVolume / position.volume;
+    const realizedProfit = position.profit * fraction;
+    const quote = this.quoteMap.get(position.symbol);
+    const closePrice = quote
+      ? position.side === 'buy'
+        ? quote.bid
+        : quote.ask
+      : position.openPrice;
+    this.balance += realizedProfit;
+    this.historyList.unshift({
+      id: position.id,
+      symbol: position.symbol,
+      side: position.side,
+      volume: closedVolume,
+      openPrice: position.openPrice,
+      closePrice,
+      openTime: position.openTime,
+      closeTime: Date.now(),
+      profit: realizedProfit,
+    });
     if (closedVolume >= position.volume) this.positionsMap.delete(positionId);
     else {
       position.volume -= closedVolume;

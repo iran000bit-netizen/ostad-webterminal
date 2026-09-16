@@ -40,6 +40,14 @@ normal connection dialog. Never commit `.env`; it is ignored by git.
 - WebSocket quote, account and position updates
 - Broker registry for MetaApi (MT4/MT5), OANDA, Alpaca and Binance
 - Responsive login and new-order dialogs with API credential fields
+- Ostad wallet allowlisting and a plain-text deposit address dialog
+
+## Ostad wallets and deposits
+
+Wallet login can be restricted with `OSTAD_ALLOWED_WALLETS`, a comma-separated,
+case-insensitive list of EVM addresses. `OSTAD_DEPOSIT_ADDRESS` controls the
+address shown by the header's **DEPOSIT** link. Both values have safe defaults
+in the server and are documented in `.env.example`.
 
 ## Brokers
 

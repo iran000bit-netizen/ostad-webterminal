@@ -5,6 +5,7 @@ import type { BrokerAdapter, Timeframe } from './brokers/types.js';
 import { createSession, getSession, removeSession } from './sessions.js';
 import { autoConnection } from './sessions.js';
 import { verifyWallet, walletMessage } from './wallet.js';
+import { allowedWallets, depositAddress } from './config.js';
 type SessionRequest = Request & { adapter?: BrokerAdapter };
 
 const auth = (req: SessionRequest, res: Response, next: NextFunction) => {
@@ -23,6 +24,9 @@ export function createHttpApp() {
   app.use(express.json());
   app.get('/api/brokers', (_, res) => res.json(BROKERS));
   app.get('/api/autoconnect', (_, res) => res.json(autoConnection()));
+  app.get('/api/config', (_, res) =>
+    res.json({ depositAddress: depositAddress(), allowedWallets: allowedWallets() }),
+  );
   app.post('/api/wallet/nonce', (req, res) => {
     try {
       const { address } = req.body as { address?: string };
@@ -39,6 +43,9 @@ export function createHttpApp() {
       if (!address || !signature) throw new Error('Wallet address and signature are required');
       res.json(await verifyWallet(address, signature));
     } catch (e) {
+      if (e instanceof Error && e.message === 'Wallet not authorized') {
+        return res.status(403).json({ error: e.message });
+      }
       error(res, e);
     }
   });
@@ -61,7 +68,7 @@ export function createHttpApp() {
     }
   });
   app.post('/api/logout', auth, async (req, res) => {
-    const token = req.headers.authorization!.replace(/^Bearer\\s+/, '');
+    const token = req.headers.authorization!.replace(/^Bearer\s+/, '');
     removeSession(token);
     res.json({ ok: true });
   });
@@ -84,6 +91,7 @@ export function createHttpApp() {
   app.get('/api/account', async (req, res) => res.json(await adapter(req).account()));
   app.get('/api/positions', async (req, res) => res.json(await adapter(req).positions()));
   app.get('/api/orders', async (req, res) => res.json(await adapter(req).orders()));
+  app.get('/api/history', async (req, res) => res.json(await adapter(req).history()));
   app.post('/api/orders', async (req, res) => {
     try {
       res.json(await adapter(req).placeOrder(req.body));

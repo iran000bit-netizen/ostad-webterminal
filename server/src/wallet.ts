@@ -2,6 +2,7 @@ import { verifyMessage } from 'viem';
 import type { BrokerAdapter, BrokerCredentials } from './brokers/types.js';
 import { createAdapter } from './brokers/registry.js';
 import { createSession } from './sessions.js';
+import { allowedWallets } from './config.js';
 
 const challenges = new Map<string, string>();
 const config = (): BrokerCredentials & { brokerId?: string } => ({
@@ -20,14 +21,19 @@ export const walletMessage = (address: string) => {
   return message;
 };
 export async function verifyWallet(address: string, signature: string) {
-  const message = challenges.get(address.toLowerCase());
+  const normalizedAddress = address.toLowerCase();
+  const wallets = allowedWallets();
+  if (wallets.length && !wallets.includes(normalizedAddress)) {
+    throw new Error('Wallet not authorized');
+  }
+  const message = challenges.get(normalizedAddress);
   if (!message) throw new Error('Wallet challenge expired or not found');
   const valid = await verifyMessage({
     address: address as `0x${string}`,
     message,
     signature: signature as `0x${string}`,
   });
-  challenges.delete(address.toLowerCase());
+  challenges.delete(normalizedAddress);
   if (!valid) throw new Error('Invalid wallet signature');
   const settings = config();
   const brokerId = settings.brokerId ?? 'demo';

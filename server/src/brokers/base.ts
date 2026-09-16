@@ -3,6 +3,7 @@ import type {
   BrokerAdapter,
   BrokerCredentials,
   Candle,
+  ClosedPosition,
   Order,
   OrderRequest,
   Position,
@@ -51,6 +52,9 @@ export abstract class StubBrokerAdapter implements BrokerAdapter {
     return this.notImplemented();
   }
   async orders(): Promise<Order[]> {
+    return this.notImplemented();
+  }
+  async history(): Promise<ClosedPosition[]> {
     return this.notImplemented();
   }
   async placeOrder(_req: OrderRequest): Promise<Position | Order> {

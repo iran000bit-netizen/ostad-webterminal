@@ -17,6 +17,8 @@ export function attachWebSocket(server: Server) {
     const timer = setInterval(async () => {
       send('account', await a.account());
       send('positions', await a.positions());
+      send('orders', await a.orders());
+      send('history', await a.history());
     }, 1000);
     socket.on('close', () => {
       off();

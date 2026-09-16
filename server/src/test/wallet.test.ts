@@ -8,6 +8,7 @@ const account = privateKeyToAccount(
 describe('wallet authentication', () => {
   beforeEach(() => {
     delete process.env.OSTAD_BROKER;
+    process.env.OSTAD_ALLOWED_WALLETS = account.address;
   });
   it('verifies a signed nonce and creates a session', async () => {
     const message = walletMessage(account.address);
@@ -22,5 +23,13 @@ describe('wallet authentication', () => {
     await expect(verifyWallet(account.address, signature)).rejects.toThrow(
       'Invalid wallet signature',
     );
+  });
+  it('rejects a wallet that is not allowlisted', async () => {
+    const other = privateKeyToAccount(
+      '0x2222222222222222222222222222222222222222222222222222222222222222',
+    );
+    const message = walletMessage(other.address);
+    const signature = await other.signMessage({ message });
+    await expect(verifyWallet(other.address, signature)).rejects.toThrow('Wallet not authorized');
   });
 });

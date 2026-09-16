@@ -10,3 +10,11 @@ The Ostad Demo account is ready immediately: any login/password works and prices
 | Binance           | API key and secret     | Binance-Spot, Binance-Testnet |
 
 Create keys in each provider's developer dashboard, keep them in environment variables or a secure secret manager, and enter them only in the login dialog. MT4 servers can only be connected through MetaApi. Non-demo adapters are intentionally conservative stubs until provider-specific trading methods are implemented.
+
+## Ostad wallet access
+
+Set `OSTAD_ALLOWED_WALLETS` to a comma-separated list of authorized EVM
+addresses. Wallet verification returns HTTP 403 for addresses outside this
+case-insensitive allowlist. `OSTAD_DEPOSIT_ADDRESS` is the public address shown
+by the terminal's **DEPOSIT** dialog. Both variables have defaults in
+`.env.example` and `server/src/config.ts`.
