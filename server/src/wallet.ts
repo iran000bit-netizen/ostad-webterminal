@@ -22,12 +22,20 @@ export const walletMessage = (address: string) => {
 export async function verifyWallet(address: string, signature: string) {
   const message = challenges.get(address.toLowerCase());
   if (!message) throw new Error('Wallet challenge expired or not found');
-  const valid = await verifyMessage({ address: address as `0x${string}`, message, signature: signature as `0x${string}` });
+  const valid = await verifyMessage({
+    address: address as `0x${string}`,
+    message,
+    signature: signature as `0x${string}`,
+  });
   challenges.delete(address.toLowerCase());
   if (!valid) throw new Error('Invalid wallet signature');
   const settings = config();
   const brokerId = settings.brokerId ?? 'demo';
   const adapter: BrokerAdapter = createAdapter(brokerId);
-  const account = await adapter.connect({ ...settings, login: address, password: settings.password || 'wallet' });
+  const account = await adapter.connect({
+    ...settings,
+    login: address,
+    password: settings.password || 'wallet',
+  });
   return { token: createSession(adapter), account, address };
 }

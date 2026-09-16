@@ -1,11 +1,119 @@
 import express, { type Request, type Response, type NextFunction } from 'express';
 import cors from 'cors';
 import { BROKERS, createAdapter } from './brokers/registry.js';
-import type { BrokerAdapter } from './brokers/types.js';
+import type { BrokerAdapter, Timeframe } from './brokers/types.js';
 import { createSession, getSession, removeSession } from './sessions.js';
 import { autoConnection } from './sessions.js';
 import { verifyWallet, walletMessage } from './wallet.js';
-const auth=(req:Request,res:Response,next:NextFunction)=>{const token=req.headers.authorization?.replace(/^Bearer\s+/,'');const adapter=getSession(token);if(!adapter)return res.status(401).json({error:'Unauthorized'});(req as any).adapter=adapter;next()};
-const adapter=(req:Request)=> (req as any).adapter as BrokerAdapter;
-const error=(res:Response,e:unknown)=>res.status(400).json({error:e instanceof Error?e.message:'Request failed'});
-export function createHttpApp(){const app=express();app.use(cors());app.use(express.json());app.get('/api/brokers',(_,res)=>res.json(BROKERS));app.get('/api/autoconnect',(_,res)=>res.json(autoConnection()));app.post('/api/wallet/nonce',(req,res)=>{try{const {address}=req.body as {address?:string};if(!address||!/^0x[0-9a-fA-F]{40}$/.test(address))return res.status(400).json({error:'Valid wallet address is required'});res.json({message:walletMessage(address)})}catch(e){error(res,e)}});app.post('/api/wallet/verify',async(req,res)=>{try{const {address,signature}=req.body as {address?:string;signature?:string};if(!address||!signature)throw new Error('Wallet address and signature are required');res.json(await verifyWallet(address,signature))}catch(e){error(res,e)}});app.post('/api/login',async(req,res)=>{try{const {brokerId,login='',password='',server='',apiKey,apiSecret,accountId}=req.body;const a=createAdapter(brokerId);const account=await a.connect({login,password,server,apiKey,apiSecret,accountId});res.json({token:createSession(a),account})}catch(e){error(res,e)}});app.post('/api/logout',auth,async(req,res)=>{const token=req.headers.authorization!.replace(/^Bearer\\s+/,'');removeSession(token);res.json({ok:true})});app.use('/api',auth);app.get('/api/symbols',async(req,res)=>res.json(await adapter(req).symbols()));app.get('/api/quotes',async(req,res)=>res.json(await adapter(req).quotes()));app.get('/api/candles',async(req,res)=>{try{res.json(await adapter(req).candles(String(req.query.symbol),String(req.query.tf||'H1') as any,Number(req.query.limit||100)))}catch(e){error(res,e)}});app.get('/api/account',async(req,res)=>res.json(await adapter(req).account()));app.get('/api/positions',async(req,res)=>res.json(await adapter(req).positions()));app.get('/api/orders',async(req,res)=>res.json(await adapter(req).orders()));app.post('/api/orders',async(req,res)=>{try{res.json(await adapter(req).placeOrder(req.body))}catch(e){error(res,e)}});app.delete('/api/orders/:id',async(req,res)=>{try{await adapter(req).cancelOrder(req.params.id);res.json({ok:true})}catch(e){error(res,e)}});app.post('/api/positions/:id/close',async(req,res)=>{try{await adapter(req).closePosition(req.params.id,req.body?.volume);res.json({ok:true})}catch(e){error(res,e)}});app.patch('/api/positions/:id',async(req,res)=>{try{await adapter(req).modifyPosition(req.params.id,req.body?.sl,req.body?.tp);res.json({ok:true})}catch(e){error(res,e)}});return app}
+type SessionRequest = Request & { adapter?: BrokerAdapter };
+
+const auth = (req: SessionRequest, res: Response, next: NextFunction) => {
+  const token = req.headers.authorization?.replace(/^Bearer\s+/, '');
+  const adapter = getSession(token);
+  if (!adapter) return res.status(401).json({ error: 'Unauthorized' });
+  req.adapter = adapter;
+  next();
+};
+const adapter = (req: Request) => (req as SessionRequest).adapter as BrokerAdapter;
+const error = (res: Response, e: unknown) =>
+  res.status(400).json({ error: e instanceof Error ? e.message : 'Request failed' });
+export function createHttpApp() {
+  const app = express();
+  app.use(cors());
+  app.use(express.json());
+  app.get('/api/brokers', (_, res) => res.json(BROKERS));
+  app.get('/api/autoconnect', (_, res) => res.json(autoConnection()));
+  app.post('/api/wallet/nonce', (req, res) => {
+    try {
+      const { address } = req.body as { address?: string };
+      if (!address || !/^0x[0-9a-fA-F]{40}$/.test(address))
+        return res.status(400).json({ error: 'Valid wallet address is required' });
+      res.json({ message: walletMessage(address) });
+    } catch (e) {
+      error(res, e);
+    }
+  });
+  app.post('/api/wallet/verify', async (req, res) => {
+    try {
+      const { address, signature } = req.body as { address?: string; signature?: string };
+      if (!address || !signature) throw new Error('Wallet address and signature are required');
+      res.json(await verifyWallet(address, signature));
+    } catch (e) {
+      error(res, e);
+    }
+  });
+  app.post('/api/login', async (req, res) => {
+    try {
+      const {
+        brokerId,
+        login = '',
+        password = '',
+        server = '',
+        apiKey,
+        apiSecret,
+        accountId,
+      } = req.body;
+      const a = createAdapter(brokerId);
+      const account = await a.connect({ login, password, server, apiKey, apiSecret, accountId });
+      res.json({ token: createSession(a), account });
+    } catch (e) {
+      error(res, e);
+    }
+  });
+  app.post('/api/logout', auth, async (req, res) => {
+    const token = req.headers.authorization!.replace(/^Bearer\\s+/, '');
+    removeSession(token);
+    res.json({ ok: true });
+  });
+  app.use('/api', auth);
+  app.get('/api/symbols', async (req, res) => res.json(await adapter(req).symbols()));
+  app.get('/api/quotes', async (req, res) => res.json(await adapter(req).quotes()));
+  app.get('/api/candles', async (req, res) => {
+    try {
+      res.json(
+        await adapter(req).candles(
+          String(req.query.symbol),
+          String(req.query.tf || 'H1') as Timeframe,
+          Number(req.query.limit || 100),
+        ),
+      );
+    } catch (e) {
+      error(res, e);
+    }
+  });
+  app.get('/api/account', async (req, res) => res.json(await adapter(req).account()));
+  app.get('/api/positions', async (req, res) => res.json(await adapter(req).positions()));
+  app.get('/api/orders', async (req, res) => res.json(await adapter(req).orders()));
+  app.post('/api/orders', async (req, res) => {
+    try {
+      res.json(await adapter(req).placeOrder(req.body));
+    } catch (e) {
+      error(res, e);
+    }
+  });
+  app.delete('/api/orders/:id', async (req, res) => {
+    try {
+      await adapter(req).cancelOrder(req.params.id);
+      res.json({ ok: true });
+    } catch (e) {
+      error(res, e);
+    }
+  });
+  app.post('/api/positions/:id/close', async (req, res) => {
+    try {
+      await adapter(req).closePosition(req.params.id, req.body?.volume);
+      res.json({ ok: true });
+    } catch (e) {
+      error(res, e);
+    }
+  });
+  app.patch('/api/positions/:id', async (req, res) => {
+    try {
+      await adapter(req).modifyPosition(req.params.id, req.body?.sl, req.body?.tp);
+      res.json({ ok: true });
+    } catch (e) {
+      error(res, e);
+    }
+  });
+  return app;
+}

@@ -1,52 +1,384 @@
-import type { BrokerAdapter, BrokerCredentials, Candle, Order, OrderRequest, Position, Quote, Side, Timeframe } from './types.js';
+import WebSocket from 'ws';
+import type {
+  BrokerAdapter,
+  BrokerCredentials,
+  Candle,
+  Order,
+  OrderRequest,
+  Position,
+  Quote,
+  Side,
+  Timeframe,
+} from './types.js';
 
-const cryptoSymbols = ['BTCUSDT','ETHUSDT','BNBUSDT','XRPUSDT','SOLUSDT','ADAUSDT','DOGEUSDT','LTCUSDT'];
-const forexBases: Record<string, number> = { EURUSD:1.085, GBPUSD:1.27, USDJPY:150.2, XAUUSD:2325 };
-const tfMs: Record<Timeframe, number> = { M1:60000,M5:300000,M15:900000,M30:1800000,H1:3600000,H4:14400000,D1:86400000,W1:604800000,MN:2592000000 };
-const binanceTf: Record<Timeframe,string> = { M1:'1m',M5:'5m',M15:'15m',M30:'30m',H1:'1h',H4:'4h',D1:'1d',W1:'1w',MN:'1M' };
+type SymbolKind = 'crypto' | 'forex' | 'metal';
+type SymbolSpec = { digits: number; contractSize: number; basePrice: number; kind: SymbolKind };
+type BinanceTicker = { symbol: string; bidPrice: string; askPrice: string };
+type BinanceBookTickerMessage = { data?: { s?: string; b?: string; a?: string } };
+type BinanceKline = [number, string, string, string, string, string, ...unknown[]];
+
+export const SYMBOLS: Record<string, SymbolSpec> = {
+  BTCUSDT: { digits: 2, contractSize: 1, basePrice: 65_000, kind: 'crypto' },
+  ETHUSDT: { digits: 2, contractSize: 1, basePrice: 3_400, kind: 'crypto' },
+  BNBUSDT: { digits: 2, contractSize: 1, basePrice: 600, kind: 'crypto' },
+  XRPUSDT: { digits: 4, contractSize: 1, basePrice: 0.52, kind: 'crypto' },
+  SOLUSDT: { digits: 2, contractSize: 1, basePrice: 145, kind: 'crypto' },
+  ADAUSDT: { digits: 4, contractSize: 1, basePrice: 0.45, kind: 'crypto' },
+  DOGEUSDT: { digits: 5, contractSize: 1, basePrice: 0.13, kind: 'crypto' },
+  LTCUSDT: { digits: 2, contractSize: 1, basePrice: 70, kind: 'crypto' },
+  EURUSD: { digits: 5, contractSize: 100_000, basePrice: 1.085, kind: 'forex' },
+  GBPUSD: { digits: 5, contractSize: 100_000, basePrice: 1.27, kind: 'forex' },
+  USDJPY: { digits: 3, contractSize: 100_000, basePrice: 150.2, kind: 'forex' },
+  XAUUSD: { digits: 2, contractSize: 100, basePrice: 2_325, kind: 'metal' },
+};
+
+const timeframeMs: Record<Timeframe, number> = {
+  M1: 60_000,
+  M5: 300_000,
+  M15: 900_000,
+  M30: 1_800_000,
+  H1: 3_600_000,
+  H4: 14_400_000,
+  D1: 86_400_000,
+  W1: 604_800_000,
+  MN: 2_592_000_000,
+};
+const binanceTimeframe: Record<Timeframe, string> = {
+  M1: '1m',
+  M5: '5m',
+  M15: '15m',
+  M30: '30m',
+  H1: '1h',
+  H4: '4h',
+  D1: '1d',
+  W1: '1w',
+  MN: '1M',
+};
 const id = () => Math.random().toString(36).slice(2, 10);
 
 export class DemoBroker implements BrokerAdapter {
-  readonly id = 'demo'; readonly name = 'Ostad Demo';
-  private creds!: BrokerCredentials; private connected = false; private timer?: ReturnType<typeof setInterval>;
-  private quoteMap = new Map<string, Quote>(); private positionsMap = new Map<string, Position>(); private ordersMap = new Map<string, Order>();
-  private listeners = new Set<(q: Quote)=>void>(); private balance = 10000;
+  readonly id = 'demo';
+  readonly name = 'Ostad Demo';
+  private creds!: BrokerCredentials;
+  private connected = false;
+  private timer?: ReturnType<typeof setInterval>;
+  private stream?: WebSocket;
+  private streamReconnect?: ReturnType<typeof setTimeout>;
+  private streamLive = false;
+  private readonly quoteMap = new Map<string, Quote>();
+  private readonly positionsMap = new Map<string, Position>();
+  private readonly ordersMap = new Map<string, Order>();
+  private readonly listeners = new Set<(q: Quote) => void>();
+  private balance = 10_000;
+
   constructor() {
-    [...cryptoSymbols, ...Object.keys(forexBases)].forEach((symbol) => {
-      const p = forexBases[symbol] ?? ({BTCUSDT:65000,ETHUSDT:3400,BNBUSDT:600,XRPUSDT:.52,SOLUSDT:145,ADAUSDT:.45,DOGEUSDT:.13,LTCUSDT:70}[symbol] ?? 1);
-      const spread = symbol.endsWith('USD') && symbol !== 'XAUUSD' ? 0.00015 : p * (symbol === 'XAUUSD' ? .00015 : .0002);
-      this.quoteMap.set(symbol, { symbol, bid: p, ask: p + spread, time: Date.now(), digits: symbol === 'USDJPY' ? 3 : symbol.includes('USD') && !cryptoSymbols.includes(symbol) ? 5 : 2 });
+    Object.entries(SYMBOLS).forEach(([symbol, spec]) => {
+      const spread = spec.kind === 'forex' ? 0.00015 : spec.basePrice * 0.0002;
+      this.quoteMap.set(symbol, {
+        symbol,
+        bid: spec.basePrice,
+        ask: spec.basePrice + spread,
+        time: Date.now(),
+        digits: spec.digits,
+      });
     });
   }
-  async connect(creds: BrokerCredentials) { this.creds = creds; this.connected = true; this.startTicks(); try { if (!process.env.OSTAD_OFFLINE) await this.loadBinanceQuotes(); } catch { console.warn('Binance unavailable; using simulated random walk'); } return this.account(); }
-  async disconnect() { this.connected = false; if (this.timer) clearInterval(this.timer); }
-  async symbols() { return [...this.quoteMap.keys()]; }
-  async quotes() { return [...this.quoteMap.values()]; }
-  async candles(symbol:string, tf:Timeframe, limit:number) {
-    const q = this.quoteMap.get(symbol); if (!q) throw new Error('Unknown symbol');
-    if (cryptoSymbols.includes(symbol) && !process.env.OSTAD_OFFLINE) try {
-      const response = await fetch(`https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${binanceTf[tf]}&limit=${Math.min(limit,1000)}`);
-      if (response.ok) return (await response.json() as any[]).map(k=>({time:k[0],open:+k[1],high:+k[2],low:+k[3],close:+k[4],volume:+k[5]}));
-    } catch { console.warn('Binance candles unavailable; synthesizing candles'); }
-    const out:Candle[]=[]; let close=q.bid-limit*0.0002;
-    for(let i=limit;i>0;i--){const time=Date.now()-i*tfMs[tf], open=close, delta=(Math.random()-.5)*close*.006; close=Math.max(.0001,close+delta); out.push({time,open,high:Math.max(open,close)*(1+Math.random()*.001),low:Math.min(open,close)*(1-Math.random()*.001),close,volume:Math.round(Math.random()*1000)});}
-    return out;
+
+  async connect(creds: BrokerCredentials) {
+    this.creds = creds;
+    this.connected = true;
+    this.startTicks();
+    if (!process.env.OSTAD_OFFLINE) {
+      try {
+        await this.loadBinanceQuotes();
+      } catch {
+        console.warn('Binance unavailable; using simulated random walk');
+      }
+      this.connectBinanceStream();
+    }
+    return this.account();
   }
-  async account() { const margin=[...this.positionsMap.values()].reduce((s,p)=>s+this.marginFor(p.symbol,p.volume,p.openPrice),0), equity=this.balance+[...this.positionsMap.values()].reduce((s,p)=>s+p.profit,0); const login=this.creds?.login??''; return {login,name:login.startsWith('0x')?`${login.slice(0,6)}…${login.slice(-4)}`:login||'Demo Trader',server:'Ostad-Demo',currency:'USD',balance:this.balance,equity,margin,freeMargin:equity-margin,leverage:100}; }
-  async positions(){return [...this.positionsMap.values()]} async orders(){return [...this.ordersMap.values()]}
-  async placeOrder(req:OrderRequest) {
-    if(req.volume<=0) throw new Error('Volume must be positive');
-    if(req.type!=='market'){if(!req.price)throw new Error('Pending order price is required');const order:Order={id:id(),symbol:req.symbol,side:req.side,type:req.type,volume:req.volume,price:req.price,sl:req.sl,tp:req.tp,time:Date.now()};this.ordersMap.set(order.id,order);return order;}
-    return this.open(req.symbol,req.side,req.volume,req.sl,req.tp);
+
+  async disconnect() {
+    this.connected = false;
+    if (this.timer) clearInterval(this.timer);
+    if (this.streamReconnect) clearTimeout(this.streamReconnect);
+    this.stream?.close();
+    this.stream = undefined;
+    this.streamLive = false;
   }
-  async closePosition(positionId:string, volume?:number){const p=this.positionsMap.get(positionId);if(!p)throw new Error('Position not found');const v=Math.min(volume??p.volume,p.volume);this.balance+=p.profit*(v/p.volume);if(v>=p.volume)this.positionsMap.delete(positionId);else {p.volume-=v;p.profit=this.positionProfit(p);}}
-  async modifyPosition(positionId:string,sl?:number,tp?:number){const p=this.positionsMap.get(positionId);if(!p)throw new Error('Position not found');p.sl=sl;p.tp=tp;}
-  async cancelOrder(orderId:string){if(!this.ordersMap.delete(orderId))throw new Error('Order not found')}
-  onQuote(cb:(q:Quote)=>void){this.listeners.add(cb);return()=>this.listeners.delete(cb)}
-  private open(symbol:string,side:Side,volume:number,sl?:number,tp?:number){const q=this.quoteMap.get(symbol);if(!q)throw new Error('Unknown symbol');const p:Position={id:id(),symbol,side,volume,openPrice:side==='buy'?q.ask:q.bid,openTime:Date.now(),sl,tp,profit:0,swap:0,commission:0};this.positionsMap.set(p.id,p);return p}
-  private startTicks(){if(this.timer)return;this.timer=setInterval(()=>this.tick(),1000)}
-  private tick(){this.quoteMap.forEach(q=>{const scale=q.symbol.includes('USD')&&!cryptoSymbols.includes(q.symbol)?q.bid*.0002:q.bid*.001;const next=Math.max(.00001,q.bid+(Math.random()-.49)*scale);q.bid=next;q.ask=next+(q.symbol==='USDJPY'?0.02:next*.0002);q.time=Date.now();this.listeners.forEach(cb=>cb({...q}));});this.positionsMap.forEach(p=>{p.profit=this.positionProfit(p);const q=this.quoteMap.get(p.symbol)!;if((p.sl!==undefined&&((p.side==='buy'&&q.bid<=p.sl)||(p.side==='sell'&&q.ask>=p.sl)))||(p.tp!==undefined&&((p.side==='buy'&&q.bid>=p.tp)||(p.side==='sell'&&q.ask<=p.tp))))this.closePosition(p.id).catch(()=>{});});this.ordersMap.forEach(o=>{const q=this.quoteMap.get(o.symbol);if(q&&((o.type==='limit'&&((o.side==='buy'&&q.ask<=o.price)||(o.side==='sell'&&q.bid>=o.price)))||(o.type==='stop'&&((o.side==='buy'&&q.ask>=o.price)||(o.side==='sell'&&q.bid<=o.price))))){this.ordersMap.delete(o.id);this.open(o.symbol,o.side,o.volume,o.sl,o.tp)}})}
-  private positionProfit(p:Position){const q=this.quoteMap.get(p.symbol);if(!q)return 0;const diff=(p.side==='buy'?q.bid-p.openPrice:p.openPrice-q.ask);return diff*p.volume*(p.symbol==='XAUUSD'?100:p.symbol.includes('USD')&&!cryptoSymbols.includes(p.symbol)?100000:1)}
-  private marginFor(symbol:string,volume:number,price:number){return volume*price*(symbol==='XAUUSD'?100:symbol.includes('USD')&&!cryptoSymbols.includes(symbol)?100000:1)/100}
-  private async loadBinanceQuotes(){const r=await fetch('https://api.binance.com/api/v3/ticker/bookTicker');if(!r.ok)throw new Error('Binance HTTP '+r.status);const data=await r.json() as any[];for(const x of data){if(!cryptoSymbols.includes(x.symbol))continue;const q=this.quoteMap.get(x.symbol);if(q){q.bid=+x.bidPrice;q.ask=+x.askPrice;q.time=Date.now()}}}
+
+  async symbols() {
+    return Object.keys(SYMBOLS);
+  }
+
+  async quotes() {
+    return [...this.quoteMap.values()];
+  }
+
+  async candles(symbol: string, tf: Timeframe, limit: number) {
+    const quote = this.quoteMap.get(symbol);
+    const spec = SYMBOLS[symbol];
+    if (!quote || !spec) throw new Error('Unknown symbol');
+    if (spec.kind === 'crypto' && !process.env.OSTAD_OFFLINE) {
+      try {
+        const response = await fetch(
+          `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${binanceTimeframe[tf]}&limit=${Math.min(limit, 1000)}`,
+        );
+        if (response.ok) {
+          const candles = (await response.json()) as BinanceKline[];
+          return candles.map((candle) => ({
+            time: Math.floor(candle[0] / timeframeMs[tf]) * timeframeMs[tf],
+            open: +candle[1],
+            high: +candle[2],
+            low: +candle[3],
+            close: +candle[4],
+            volume: +candle[5],
+          }));
+        }
+      } catch {
+        console.warn('Binance candles unavailable; synthesizing candles');
+      }
+    }
+    const output: Candle[] = [];
+    let close = quote.bid - limit * 0.0002;
+    for (let index = limit; index > 0; index -= 1) {
+      const time =
+        Math.floor((Date.now() - index * timeframeMs[tf]) / timeframeMs[tf]) * timeframeMs[tf];
+      const open = close;
+      const delta = (Math.random() - 0.5) * close * 0.006;
+      close = Math.max(0.0001, close + delta);
+      output.push({
+        time,
+        open,
+        high: Math.max(open, close) * (1 + Math.random() * 0.001),
+        low: Math.min(open, close) * (1 - Math.random() * 0.001),
+        close,
+        volume: Math.round(Math.random() * 1000),
+      });
+    }
+    return output;
+  }
+
+  async account() {
+    const margin = [...this.positionsMap.values()].reduce(
+      (sum, position) => sum + this.marginFor(position.symbol, position.volume, position.openPrice),
+      0,
+    );
+    const equity =
+      this.balance +
+      [...this.positionsMap.values()].reduce((sum, position) => sum + position.profit, 0);
+    const login = this.creds?.login ?? '';
+    return {
+      login,
+      name: login.startsWith('0x')
+        ? `${login.slice(0, 6)}…${login.slice(-4)}`
+        : login || 'Demo Trader',
+      server: 'Ostad-Demo',
+      currency: 'USD',
+      balance: this.balance,
+      equity,
+      margin,
+      freeMargin: equity - margin,
+      leverage: 100,
+    };
+  }
+
+  async positions() {
+    return [...this.positionsMap.values()];
+  }
+
+  async orders() {
+    return [...this.ordersMap.values()];
+  }
+
+  async placeOrder(request: OrderRequest) {
+    if (request.volume <= 0) throw new Error('Volume must be positive');
+    if (request.type !== 'market') {
+      if (!request.price) throw new Error('Pending order price is required');
+      const pending: Order = {
+        id: id(),
+        symbol: request.symbol,
+        side: request.side,
+        type: request.type,
+        volume: request.volume,
+        price: request.price,
+        sl: request.sl,
+        tp: request.tp,
+        time: Date.now(),
+      };
+      this.ordersMap.set(pending.id, pending);
+      return pending;
+    }
+    return this.open(request.symbol, request.side, request.volume, request.sl, request.tp);
+  }
+
+  async closePosition(positionId: string, volume?: number) {
+    const position = this.positionsMap.get(positionId);
+    if (!position) throw new Error('Position not found');
+    const closedVolume = Math.min(volume ?? position.volume, position.volume);
+    this.balance += position.profit * (closedVolume / position.volume);
+    if (closedVolume >= position.volume) this.positionsMap.delete(positionId);
+    else {
+      position.volume -= closedVolume;
+      position.profit = this.positionProfit(position);
+    }
+  }
+
+  async modifyPosition(positionId: string, sl?: number, tp?: number) {
+    const position = this.positionsMap.get(positionId);
+    if (!position) throw new Error('Position not found');
+    position.sl = sl;
+    position.tp = tp;
+  }
+
+  async cancelOrder(orderId: string) {
+    if (!this.ordersMap.delete(orderId)) throw new Error('Order not found');
+  }
+
+  onQuote(callback: (q: Quote) => void) {
+    this.listeners.add(callback);
+    return () => this.listeners.delete(callback);
+  }
+
+  private open(symbol: string, side: Side, volume: number, sl?: number, tp?: number) {
+    const quote = this.quoteMap.get(symbol);
+    if (!quote) throw new Error('Unknown symbol');
+    const position: Position = {
+      id: id(),
+      symbol,
+      side,
+      volume,
+      openPrice: side === 'buy' ? quote.ask : quote.bid,
+      openTime: Date.now(),
+      sl,
+      tp,
+      profit: 0,
+      swap: 0,
+      commission: 0,
+    };
+    this.positionsMap.set(position.id, position);
+    return position;
+  }
+
+  private startTicks() {
+    if (!this.timer) this.timer = setInterval(() => this.tick(), 1000);
+  }
+
+  private tick() {
+    this.quoteMap.forEach((quote) => {
+      const spec = SYMBOLS[quote.symbol];
+      if (!spec || (spec.kind === 'crypto' && this.streamLive)) return;
+      const scale = spec.kind === 'forex' ? quote.bid * 0.0002 : quote.bid * 0.001;
+      const next = Math.max(0.00001, quote.bid + (Math.random() - 0.49) * scale);
+      quote.bid = next;
+      quote.ask =
+        next +
+        (spec.kind === 'forex' ? (quote.symbol === 'USDJPY' ? 0.02 : 0.00015) : next * 0.0002);
+      quote.time = Date.now();
+      this.emitQuote(quote);
+    });
+    this.updateTradingState();
+  }
+
+  private emitQuote(quote: Quote) {
+    this.listeners.forEach((callback) => callback({ ...quote }));
+  }
+
+  private updateTradingState() {
+    this.positionsMap.forEach((position) => {
+      position.profit = this.positionProfit(position);
+      const quote = this.quoteMap.get(position.symbol);
+      if (!quote) return;
+      const stopped =
+        (position.sl !== undefined &&
+          ((position.side === 'buy' && quote.bid <= position.sl) ||
+            (position.side === 'sell' && quote.ask >= position.sl))) ||
+        (position.tp !== undefined &&
+          ((position.side === 'buy' && quote.bid >= position.tp) ||
+            (position.side === 'sell' && quote.ask <= position.tp)));
+      if (stopped) this.closePosition(position.id).catch(() => undefined);
+    });
+    this.ordersMap.forEach((pending) => {
+      const quote = this.quoteMap.get(pending.symbol);
+      if (!quote) return;
+      const filled =
+        (pending.type === 'limit' &&
+          ((pending.side === 'buy' && quote.ask <= pending.price) ||
+            (pending.side === 'sell' && quote.bid >= pending.price))) ||
+        (pending.type === 'stop' &&
+          ((pending.side === 'buy' && quote.ask >= pending.price) ||
+            (pending.side === 'sell' && quote.bid <= pending.price)));
+      if (filled) {
+        this.ordersMap.delete(pending.id);
+        this.open(pending.symbol, pending.side, pending.volume, pending.sl, pending.tp);
+      }
+    });
+  }
+
+  private positionProfit(position: Position) {
+    const quote = this.quoteMap.get(position.symbol);
+    const spec = SYMBOLS[position.symbol];
+    if (!quote || !spec) return 0;
+    const difference =
+      position.side === 'buy' ? quote.bid - position.openPrice : position.openPrice - quote.ask;
+    return difference * position.volume * spec.contractSize;
+  }
+
+  private marginFor(symbol: string, volume: number, price: number) {
+    const spec = SYMBOLS[symbol];
+    return spec ? (volume * price * spec.contractSize) / 100 : 0;
+  }
+
+  private async loadBinanceQuotes() {
+    const response = await fetch('https://api.binance.com/api/v3/ticker/bookTicker');
+    if (!response.ok) throw new Error(`Binance HTTP ${response.status}`);
+    const data = (await response.json()) as BinanceTicker[];
+    data.forEach((ticker) => {
+      const quote = this.quoteMap.get(ticker.symbol);
+      if (quote) {
+        quote.bid = +ticker.bidPrice;
+        quote.ask = +ticker.askPrice;
+        quote.time = Date.now();
+      }
+    });
+  }
+
+  private connectBinanceStream() {
+    const streams = Object.keys(SYMBOLS)
+      .filter((symbol) => SYMBOLS[symbol].kind === 'crypto')
+      .map((symbol) => `${symbol.toLowerCase()}@bookTicker`)
+      .join('/');
+    try {
+      this.stream = new WebSocket(`wss://stream.binance.com:9443/stream?streams=${streams}`);
+    } catch {
+      this.streamLive = false;
+      if (this.connected && !process.env.OSTAD_OFFLINE) {
+        this.streamReconnect = setTimeout(() => this.connectBinanceStream(), 3000);
+      }
+      return;
+    }
+    this.stream.on('open', () => {
+      this.streamLive = true;
+    });
+    this.stream.on('message', (raw) => {
+      const message = JSON.parse(raw.toString()) as BinanceBookTickerMessage;
+      const data = message.data;
+      if (!data?.s || !data.b || !data.a) return;
+      const quote = this.quoteMap.get(data.s);
+      if (!quote) return;
+      quote.bid = +data.b;
+      quote.ask = +data.a;
+      quote.time = Date.now();
+      this.emitQuote(quote);
+      this.updateTradingState();
+    });
+    this.stream.on('error', () => this.stream?.close());
+    this.stream.on('close', () => {
+      this.streamLive = false;
+      if (this.connected && !process.env.OSTAD_OFFLINE) {
+        this.streamReconnect = setTimeout(() => this.connectBinanceStream(), 3000);
+      }
+    });
+  }
 }
