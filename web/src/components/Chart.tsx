@@ -58,7 +58,9 @@ export function Chart({ chartType }: { chartType: ChartType }) {
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<ChartSeries | null>(null);
   const dataRef = useRef<CandlePoint[]>([]);
-  const { symbol, tf, quotes } = useTerminal((state) => state);
+  const historyLoadedRef = useRef(false);
+  const contextRef = useRef({ symbol: '', tf: '' });
+  const { symbol, tf, quotes, token } = useTerminal((state) => state);
 
   useEffect(() => {
     if (!ref.current) return;
@@ -75,7 +77,10 @@ export function Chart({ chartType }: { chartType: ChartType }) {
 
   useEffect(() => {
     if (!chartRef.current) return;
-    if (seriesRef.current) chartRef.current.removeSeries(seriesRef.current);
+    if (seriesRef.current) {
+      chartRef.current.removeSeries(seriesRef.current);
+      seriesRef.current = null;
+    }
     if (chartType === 'candles') {
       seriesRef.current = chartRef.current.addCandlestickSeries({
         upColor: '#16833b',
@@ -95,10 +100,16 @@ export function Chart({ chartType }: { chartType: ChartType }) {
   }, [chartType]);
 
   useEffect(() => {
+    if (!token) return;
     let cancelled = false;
+    const context = { symbol, tf };
+    contextRef.current = context;
+    historyLoadedRef.current = false;
+    dataRef.current = [];
+    if (seriesRef.current) applyData(seriesRef.current, chartType, []);
     api<CandleResponse[]>(`/api/candles?symbol=${symbol}&tf=${tf}&limit=100`)
       .then((candles) => {
-        if (cancelled) return;
+        if (cancelled || contextRef.current !== context) return;
         dataRef.current = candles.map((candle) => ({
           time: Math.floor(bucketTime(candle.time, tf) / 1000) as UTCTimestamp,
           open: candle.open,
@@ -110,19 +121,29 @@ export function Chart({ chartType }: { chartType: ChartType }) {
           applyData(seriesRef.current, chartType, dataRef.current);
           chartRef.current?.timeScale().fitContent();
         }
+        historyLoadedRef.current = true;
       })
       .catch(() => undefined);
     return () => {
       cancelled = true;
     };
-  }, [symbol, tf, chartType]);
+  }, [token, symbol, tf]);
 
   useEffect(() => {
+    if (
+      !token ||
+      !historyLoadedRef.current ||
+      contextRef.current.symbol !== symbol ||
+      contextRef.current.tf !== tf
+    ) {
+      return;
+    }
     const quote = quotes.find((item) => item.symbol === symbol);
     const series = seriesRef.current;
     if (!quote || !series || !dataRef.current.length) return;
     const current = dataRef.current[dataRef.current.length - 1];
     const time = Math.floor(bucketTime(quote.time, tf) / 1000) as UTCTimestamp;
+    if (time < current.time) return;
     if (current.time === time) {
       current.high = Math.max(current.high, quote.ask);
       current.low = Math.min(current.low, quote.bid);
@@ -137,14 +158,18 @@ export function Chart({ chartType }: { chartType: ChartType }) {
       });
     }
     const updated = dataRef.current[dataRef.current.length - 1];
-    if (chartType === 'candles') {
-      (series as ISeriesApi<'Candlestick'>).update(updated);
-    } else if (chartType === 'bars') {
-      (series as ISeriesApi<'Bar'>).update(updated);
-    } else {
-      (series as ISeriesApi<'Line'>).update({ time: updated.time, value: updated.close });
+    try {
+      if (chartType === 'candles') {
+        (series as ISeriesApi<'Candlestick'>).update(updated);
+      } else if (chartType === 'bars') {
+        (series as ISeriesApi<'Bar'>).update(updated);
+      } else {
+        (series as ISeriesApi<'Line'>).update({ time: updated.time, value: updated.close });
+      }
+    } catch {
+      applyData(series, chartType, dataRef.current);
     }
-  }, [quotes, symbol, tf, chartType]);
+  }, [quotes, symbol, tf, chartType, token]);
 
   return (
     <div className="chart-wrap">

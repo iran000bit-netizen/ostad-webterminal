@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Account, Order, Position, Quote } from './api';
+import type { Account, ClosedPosition, Order, Position, Quote } from './api';
 
 export type JournalEntry = { time: string; source: string; message: string };
 type State = {
@@ -8,6 +8,7 @@ type State = {
   quotes: Quote[];
   positions: Position[];
   orders: Order[];
+  history: ClosedPosition[];
   symbol: string;
   tf: string;
   logs: JournalEntry[];
@@ -20,6 +21,7 @@ export const useTerminal = create<State>((set) => ({
   quotes: [],
   positions: [],
   orders: [],
+  history: [],
   symbol: 'BTCUSDT',
   tf: 'H1',
   logs: [

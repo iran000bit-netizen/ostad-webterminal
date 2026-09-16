@@ -104,6 +104,12 @@ export function LoginDialog({ onClose, onWallet, initialError }: LoginDialogProp
   }
 
   const needs = (field: string) => selected?.requires.includes(field) ?? false;
+  const canSubmit =
+    (needs('login') ? Boolean(loginName) : true) &&
+    (needs('password') ? Boolean(password) : true) &&
+    (needs('apiKey') ? Boolean(apiKey) : true) &&
+    (needs('apiSecret') ? Boolean(apiSecret) : true) &&
+    (needs('accountId') ? Boolean(accountId) : true);
   return (
     <div className="modal-backdrop">
       <div className="dialog login-dialog">
@@ -122,22 +128,26 @@ export function LoginDialog({ onClose, onWallet, initialError }: LoginDialogProp
               ))}
             </select>
           </label>
-          <label>
-            Login
-            <input
-              className={!loginName ? 'empty' : ''}
-              value={loginName}
-              onChange={(event) => setLogin(event.target.value)}
-            />
-          </label>
-          <label>
-            Password
-            <input
-              type="password"
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-            />
-          </label>
+          {needs('login') && (
+            <label>
+              Login
+              <input
+                className={!loginName ? 'empty' : ''}
+                value={loginName}
+                onChange={(event) => setLogin(event.target.value)}
+              />
+            </label>
+          )}
+          {needs('password') && (
+            <label>
+              Password
+              <input
+                type="password"
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+              />
+            </label>
+          )}
           {needs('apiKey') && (
             <label>
               API Key
@@ -179,7 +189,7 @@ export function LoginDialog({ onClose, onWallet, initialError }: LoginDialogProp
           {error && <div className="error">{error}</div>}
           <div className="dialog-actions">
             <button onClick={demo}>Demo</button>
-            <button disabled={!loginName || !password} className="primary" onClick={submit}>
+            <button disabled={!canSubmit} className="primary" onClick={submit}>
               OK
             </button>
             <button onClick={onClose}>Cancel</button>

@@ -6,6 +6,7 @@ type NavigatorProps = {
   brokers: Broker[];
   account?: Account;
   wallet?: string;
+  allowedWallets: string[];
 };
 
 function WalletStatus({ address }: { address: string }) {
@@ -40,14 +41,20 @@ function WalletStatus({ address }: { address: string }) {
   );
 }
 
-export function Navigator({ brokers, account, wallet }: NavigatorProps) {
+export function Navigator({ brokers, account, wallet, allowedWallets }: NavigatorProps) {
   const currentAccount = useTerminal((state) => state.account);
+  const authorizedWallet = allowedWallets[0];
   return (
     <section className="panel navigator">
       <div className="panel-head">Navigator</div>
       <p>▾ Accounts</p>
       <p className="indent">◉ {account?.login || currentAccount?.login || 'Not connected'}</p>
       {wallet && <WalletStatus address={wallet} />}
+      {authorizedWallet && (
+        <p className="indent wallet-line">
+          Ostad wallet (authorized): {authorizedWallet.slice(0, 6)}…{authorizedWallet.slice(-4)}
+        </p>
+      )}
       <p>▾ Brokers</p>
       {brokers.map((broker) => (
         <p className="indent" key={broker.id}>

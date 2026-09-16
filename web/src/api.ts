@@ -12,6 +12,17 @@ export type Position = {
   swap: number;
   commission: number;
 };
+export type ClosedPosition = {
+  id: string;
+  symbol: string;
+  side: 'buy' | 'sell';
+  volume: number;
+  openPrice: number;
+  closePrice: number;
+  openTime: number;
+  closeTime: number;
+  profit: number;
+};
 export type Order = {
   id: string;
   symbol: string;
@@ -41,6 +52,7 @@ export type Broker = {
   requires: string[];
   status: 'ready' | 'needs_api_key';
 };
+export type AppConfig = { depositAddress: string; allowedWallets: string[] };
 const token = () => localStorage.getItem('ostad-token') || '';
 export async function api<T>(path: string, options: RequestInit = {}) {
   const res = await fetch(path, {
@@ -63,6 +75,9 @@ export const login = (body: Record<string, unknown>) =>
 export const getBrokers = () => api<Broker[]>('/api/brokers', { headers: {} });
 export const order = (body: Record<string, unknown>) =>
   api('/api/orders', { method: 'POST', body: JSON.stringify(body) });
+export const logout = () => api('/api/logout', { method: 'POST' });
+export const getConfig = () => api<AppConfig>('/api/config', { headers: {} });
+export const getHistory = () => api<ClosedPosition[]>('/api/history');
 export const walletNonce = (address: string) =>
   api<{ message: string }>('/api/wallet/nonce', {
     method: 'POST',

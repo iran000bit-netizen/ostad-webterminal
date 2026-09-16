@@ -1,4 +1,6 @@
-export function Header() {
+type HeaderProps = { onDeposit: () => void };
+
+export function Header({ onDeposit }: HeaderProps) {
   return (
     <header>
       <div className="brand">
@@ -10,7 +12,15 @@ export function Header() {
       </div>
       <nav>
         <a href="#">OPEN ACCOUNT</a>
-        <a href="#">DEPOSIT</a>
+        <a
+          href="#"
+          onClick={(event) => {
+            event.preventDefault();
+            onDeposit();
+          }}
+        >
+          DEPOSIT
+        </a>
         <a href="#">SUPPORT</a>
       </nav>
     </header>
